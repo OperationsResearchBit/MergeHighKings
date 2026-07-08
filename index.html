@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lancelot: Auto-Battle Merge</title>
+    <style>
+        body {
+            background-color: #1a1a2e;
+            color: #e2e2e2;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { color: #e94560; margin-bottom: 5px; }
+        .currency { font-size: 1.2rem; color: #f5b041; margin-bottom: 20px; }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .battlefield {
+            width: 100%;
+            height: 120px;
+            background: #16213e;
+            border: 2px solid #0f3460;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-sizing: border-box;
+        }
+
+        .combatant {
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: all 0.1s ease;
+        }
+
+        .hero-side { background: #0f3460; border: 1px solid #3f72af; }
+        .enemy-side { background: #53354a; border: 1px solid #e94560; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .tile {
+            aspect-ratio: 1;
+            background: #16213e;
+            border: 2px dashed #1a1a2e;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+            font-size: 0.8rem;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .tile:hover { background: #1f4068; }
+        .tile.occupied { border-style: solid; border-color: #3f72af; background: #1f4068; }
+        .tile .emoji { font-size: 1.8rem; margin-bottom: 2px; }
+
+        button {
+            background-color: #e94560;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            box-shadow: 0 4px #950740;
+        }
+
+        button:active {
+            box-shadow: 0 0px #950740;
+            transform: translateY(4px);
+        }
+
+        button:disabled {
+            background-color: #555;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Lancelot: Merge & Battle</h1>
+        <div class="currency">Gold: <span id="gold-display">100</span> 🪙 | Stage: <span id="stage-display">1</span></div>
+
+        <div class="battlefield">
+            <div id="player-fighter" class="combatant hero-side">Deploying...</div>
+            <div style="font-size: 1.5rem;">⚔️</div>
+            <div id="enemy-fighter" class="combatant enemy-side">Waiting...</div>
+        </div>
+
+        <button id="buy-btn" onclick="buyUnit()">Recruit Squire (Cost: 50 🪙)</button>
+
+        <div class="grid" id="merge-grid"></div>
+    </div>
+
+    <script>
+        let gold = 100;
+        let stage = 1;
+        let selectedTileIndex = null;
+
+        const TIERS = [
+            { level: 1, name: "Recruit", emoji: "🛡️", hp: 100, dmg: 15 },
+            { level: 2, name: "Man-at-Arms", emoji: "⚔️", hp: 180, dmg: 28 },
+            { level: 3, name: "Cart Knight", emoji: "🐴", hp: 320, dmg: 50 },
+            { level: 4, name: "Guinevere's Champ", emoji: "🦅", hp: 580, dmg: 95 },
+            { level: 5, name: "Sir Lancelot", emoji: "👑", hp: 1000, dmg: 180 }
+        ];
+
+        const ENEMIES = [
+            { name: "Saxon Raider", emoji: "🪓" },
+            { name: "Forest Outlaw", emoji: "🏹" },
+            { name: "Questing Beast", emoji: "🐉" },
+            { name: "Dark Knight", emoji: "🧙‍♂️" }
+        ];
+
+        let board = Array(16).fill(null);
+        board[0] = { ...TIERS[0] };
+        board[1] = { ...TIERS[0] };
+
+        let activeHero = null;
+        let activeEnemy = null;
+        let lastBattleTime = 0;
+        const ATTACK_INTERVAL = 1000;
+
+        function initDisplay() {
+            renderBoard();
+            spawnEnemy();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function renderBoard() {
+            document.getElementById('gold-display').innerText = gold;
+            document.getElementById('stage-display').innerText = stage;
+
+            const gridContainer = document.getElementById('merge-grid');
+            gridContainer.innerHTML = '';
+
+            board.forEach((unit, index) => {
+                const tile = document.createElement('div');
+                tile.className = `tile ${unit ? 'occupied' : ''}`;
+                if (selectedTileIndex === index) tile.style.borderColor = '#f5b041';
+
+                tile.innerHTML = unit
+                    ? `<span class="emoji">${unit.emoji}</span><span>T${unit.level} ${unit.name}</span>`
+                    : `<span style="color:#444;">Empty</span>`;
+
+                tile.onclick = () => handleTileClick(index);
+                gridContainer.appendChild(tile);
+            });
+
+            if (!activeHero) deployBestUnit();
+        }
+
+        function handleTileClick(index) {
+            if (selectedTileIndex === null) {
+                if (board[index]) selectedTileIndex = index;
+            } else {
+                if (selectedTileIndex === index) {
+                    selectedTileIndex = null;
+                } else if (
+                    board[index] &&
+                    board[index].level === board[selectedTileIndex].level &&
+                    board[selectedTileIndex].level < 5
+                ) {
+                    const currentLevel = board[selectedTileIndex].level;
+                    board[index] = { ...TIERS[currentLevel] };
+                    board[selectedTileIndex] = null;
+                    selectedTileIndex = null;
+                } else if (board[index]) {
+                    selectedTileIndex = index;
+                } else {
+                    board[index] = board[selectedTileIndex];
+                    board[selectedTileIndex] = null;
+                    selectedTileIndex = null;
+                }
+            }
+            renderBoard();
+        }
+
+        function buyUnit() {
+            if (gold < 50) return;
+
+            const emptyIndex = board.findIndex(slot => slot === null);
+            if (emptyIndex === -1) {
+                alert("Your training grounds are full! Merge units to free up space.");
+                return;
+            }
+
+            gold -= 50;
+            board[emptyIndex] = { ...TIERS[0] };
+            renderBoard();
+        }
+
+        function deployBestUnit() {
+            let bestIndex = -1;
+            let highestLevel = 0;
+
+            board.forEach((unit, index) => {
+                if (unit && unit.level > highestLevel) {
+                    highestLevel = unit.level;
+                    bestIndex = index;
+                }
+            });
+
+            if (bestIndex !== -1) {
+                activeHero = { ...board[bestIndex], maxHp: board[bestIndex].hp };
+                updateFighterUI('player-fighter', activeHero);
+            } else {
+                activeHero = null;
+                const el = document.getElementById('player-fighter');
+                el.innerHTML = "No knights ready! 🛑";
+                el.style.opacity = 0.5;
+            }
+        }
+
+        function spawnEnemy() {
+            const enemyTemplate = ENEMIES[Math.floor(Math.random() * ENEMIES.length)];
+            activeEnemy = {
+                name: enemyTemplate.name,
+                emoji: enemyTemplate.emoji,
+                hp: 60 + (stage * 45),
+                maxHp: 60 + (stage * 45),
+                dmg: 10 + (stage * 8)
+            };
+            updateFighterUI('enemy-fighter', activeEnemy);
+        }
+
+        function updateFighterUI(elementId, character) {
+            const el = document.getElementById(elementId);
+            if (!el) return;
+
+            if (character) {
+                el.style.opacity = 1;
+                el.innerHTML = `${character.emoji} ${character.name}<br>HP: ${Math.max(0, character.hp)}/${character.maxHp}`;
+            } else {
+                el.innerHTML = '';
+            }
+        }
+
+        function flashElement(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.style.transform = "scale(1.1)";
+            setTimeout(() => el.style.transform = "scale(1)", 100);
+        }
+
+        function battleStep() {
+            if (!activeHero || !activeEnemy) return;
+
+            activeEnemy.hp -= activeHero.dmg;
+            flashElement('enemy-fighter');
+
+            if (activeEnemy.hp <= 0) {
+                gold += 20 + (stage * 10);
+                stage++;
+                spawnEnemy();
+                renderBoard();
+                return;
+            }
+
+            activeHero.hp -= activeEnemy.dmg;
+            flashElement('player-fighter');
+
+            if (activeHero.hp <= 0) {
+                activeHero = null;
+                deployBestUnit();
+            }
+
+            updateFighterUI('player-fighter', activeHero);
+            updateFighterUI('enemy-fighter', activeEnemy);
+        }
+
+        function gameLoop(timestamp) {
+            if (!lastBattleTime) lastBattleTime = timestamp;
+
+            if (timestamp - lastBattleTime >= ATTACK_INTERVAL) {
+                battleStep();
+                lastBattleTime = timestamp;
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        window.onload = initDisplay;
+    </script>
+</body>
+</html>
